@@ -34,9 +34,9 @@ dis_batch_size = 64
 #  Basic Training Parameters
 #########################################################################################
 TOTAL_BATCH = 200
-positive_file = 'data/t_given_s_train.txt'
+positive_file = 'save/real_data.txt'
 negative_file = 'save/generator_sample.txt'
-eval_file = 'data/t_given_s_test.txt'
+eval_file = 'save/eval_file.txt'
 generated_num = 10000
 
 
@@ -90,8 +90,8 @@ def main():
     dis_data_loader = Dis_dataloader(BATCH_SIZE)
 
     generator = Generator(vocab_size, BATCH_SIZE, EMB_DIM, HIDDEN_DIM, SEQ_LENGTH, START_TOKEN)
-    #target_params = cPickle.load(open('save/target_params.pkl', 'rb'), encoding='latin1')
-    #target_lstm = TARGET_LSTM(vocab_size, BATCH_SIZE, EMB_DIM, HIDDEN_DIM, SEQ_LENGTH, START_TOKEN, target_params) # The oracle model
+    target_params = cPickle.load(open('save/target_params.pkl', 'rb'), encoding='latin1')
+    target_lstm = TARGET_LSTM(vocab_size, BATCH_SIZE, EMB_DIM, HIDDEN_DIM, SEQ_LENGTH, START_TOKEN, target_params) # The oracle model
 
     discriminator = Discriminator(sequence_length=20, num_classes=2, vocab_size=vocab_size, embedding_size=dis_embedding_dim,
                                 filter_sizes=dis_filter_sizes, num_filters=dis_num_filters, l2_reg_lambda=dis_l2_reg_lambda)
@@ -102,7 +102,7 @@ def main():
     sess.run(tf.global_variables_initializer())
 
     # First, use the oracle model to provide the positive examples, which are sampled from the oracle data distribution
-    #generate_samples(sess, target_lstm, BATCH_SIZE, generated_num, positive_file)
+    generate_samples(sess, target_lstm, BATCH_SIZE, generated_num, positive_file)
     gen_data_loader.create_batches(positive_file)
 
     log = open('save/experiment-log.txt', 'w')
@@ -112,7 +112,7 @@ def main():
     for epoch in range(PRE_EPOCH_NUM):
         loss = pre_train_epoch(sess, generator, gen_data_loader)
         if epoch % 5 == 0:
-            #generate_samples(sess, generator, BATCH_SIZE, generated_num, eval_file)
+            generate_samples(sess, generator, BATCH_SIZE, generated_num, eval_file)
             likelihood_data_loader.create_batches(eval_file)
             test_loss = target_loss(sess, target_lstm, likelihood_data_loader)
             print('pre-train epoch ', epoch, 'test_loss ', test_loss)

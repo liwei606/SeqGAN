@@ -24,6 +24,7 @@ class Generator(object):
         with tf.variable_scope('generator'):
             self.g_embeddings = tf.Variable(self.init_matrix([self.num_emb, self.emb_dim]))
             self.g_params.append(self.g_embeddings)
+            self.g_atten_unit = self.create_attention_unit(self.g_params)
             self.g_recurrent_unit = self.create_recurrent_unit(self.g_params)  # maps h_tm1 to h_t for generator
             self.g_output_unit = self.create_output_unit(self.g_params)  # maps h_t to o_t (output token logits)
 
@@ -44,22 +45,33 @@ class Generator(object):
         gen_x = tensor_array_ops.TensorArray(dtype=tf.int32, size=self.sequence_length,
                                              dynamic_size=False, infer_shape=True)
 
-        def _g_recurrence(i, x_t, h_tm1, gen_o, gen_x):
-            h_t = self.g_recurrent_unit(x_t, h_tm1)  # hidden_memory_tuple
+        def _g_recurrence(i, x_t, emb, h_tm1, gen_o, gen_x):
+            #attention_context = self.g_atten_unit(x_t, h_tm1)
+            #h_t = self.g_recurrent_unit(attention_context, h_tm1)  # hidden_memory_tuple
+            attention_context = self.g_atten_unit(x_t, h_tm1)
+            h_t = self.g_recurrent_unit(attention_context, h_tm1)
             o_t = self.g_output_unit(h_t)  # batch x vocab , logits not prob
             log_prob = tf.log(tf.nn.softmax(o_t))
             next_token = tf.cast(tf.reshape(tf.multinomial(log_prob, 1), [self.batch_size]), tf.int32)
-            x_tp1 = tf.nn.embedding_lookup(self.g_embeddings, next_token)  # batch x emb_dim
+            new_emb = tf.nn.embedding_lookup(self.g_embeddings, next_token)
+            if (tf.reduce_sum(x_t[1][0]) == 0):
+                x_t[1] = new_emb  # batch x emb_dim
+            else:
+                x_t[0] = x_t[1]
+                x_t[1] = new_emb
             gen_o = gen_o.write(i, tf.reduce_sum(tf.multiply(tf.one_hot(next_token, self.num_emb, 1.0, 0.0),
                                                              tf.nn.softmax(o_t)), 1))  # [batch_size] , prob
             gen_x = gen_x.write(i, next_token)  # indices, batch_size
-            return i + 1, x_tp1, h_t, gen_o, gen_x
+            return i + 1, x_t, emb, h_t, gen_o, gen_x
 
+        emb_list = [tf.zeros([self.batch_size, self.emb_dim])] * 2
+        emb0 = tf.nn.embedding_lookup(self.g_embeddings, self.start_token)
+        emb_list[0] = emb0
         _, _, _, self.gen_o, self.gen_x = control_flow_ops.while_loop(
-            cond=lambda i, _1, _2, _3, _4: i < self.sequence_length,
+            cond=lambda i, _1, _2, _3, _4, _5: i < self.sequence_length,
             body=_g_recurrence,
-            loop_vars=(tf.constant(0, dtype=tf.int32),
-                       tf.nn.embedding_lookup(self.g_embeddings, self.start_token), self.h0, gen_o, gen_x))
+            loop_vars=(0,
+                       emb_list, emb0, self.h0, gen_o, gen_x))
 
         self.gen_x = self.gen_x.stack()  # seq_length x batch_size
         self.gen_x = tf.transpose(self.gen_x, perm=[1, 0])  # batch_size x seq_length
@@ -202,6 +214,34 @@ class Generator(object):
             logits = tf.matmul(hidden_state, self.Wo) + self.bo
             # output = tf.nn.softmax(logits)
             return logits
+
+        return unit
+
+    def create_attention_unit(self, params):
+        self.Wes = tf.Variable(self.init_matrix([self.emb_dim]))
+        self.Weh = tf.Variable(self.init_matrix([self.hidden_dim]))
+        self.be = tf.Variable(self.init_matrix([1]))
+        self.ve = tf.Variable(self.init_matrix([1]))
+        params.extend([self.Wes, self.Weh, self.be])
+
+        def unit(x, hidden_memory_tuple):
+            hidden_state, c_prev = tf.unstack(hidden_memory_tuple)
+            hidden_proj = tf.tensordot(hidden_state, self.Weh, axes=[1, 0])
+            energys = None
+            for i in range(len(x)):
+                emb_proj = tf.tensordot(x[i], self.Wes, [1, 0])
+                energy = tf.expand_dims(tf.nn.tanh(self.ve * (emb_proj + hidden_proj + self.be)), 1)
+                if energys == None:
+                    energys = energy
+                else:
+                    energys = tf.concat([energys, energy], 1)
+            atten_w = tf.nn.softmax(energys, 1)
+            print("atten_w", atten_w.shape)
+            print("atten_w[:, 1]", atten_w[:,1].shape)
+            output = tf.zeros([self.batch_size, self.emb_dim], tf.float32)
+            for i in range(len(x)):
+                output += tf.multiply(x[i], tf.broadcast_to(tf.reshape(atten_w[:,i], [self.batch_size, 1]), [self.batch_size, self.emb_dim]))
+            return output
 
         return unit
 
