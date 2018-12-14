@@ -1,4 +1,4 @@
-# SeqGAN
+# SeqGAN with Attention
 
 ## Requirements: 
 * **Tensorflow r1.0.1**
